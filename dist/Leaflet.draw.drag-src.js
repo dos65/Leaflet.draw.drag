@@ -221,7 +221,7 @@ L.Handler.PathDrag = L.Handler.extend( /** @lends  L.Path.Drag.prototype */ {
     // undo container transform
     this._path._resetTransform();
     // apply matrix
-    this._transformPoints();
+    this._transformPoints(this._matrix);
 
     this._path._map
       .off('mousemove', this._onDrag, this)
@@ -245,54 +245,47 @@ L.Handler.PathDrag = L.Handler.extend( /** @lends  L.Path.Drag.prototype */ {
    *
    * [ x ]   [ a  b  tx ] [ x ]   [ a * x + b * y + tx ]
    * [ y ] = [ c  d  ty ] [ y ] = [ c * x + d * y + ty ]
+   *
+   * @param {Array.<Number>} matrix
    */
-  _transformPoints: function() {
-    var matrix = this._matrix;
-    var a = matrix[0];
-    var c = matrix[1];
-    var b = matrix[2];
-    var d = matrix[3];
-    var tx = matrix[4];
-    var ty = matrix[5];
-
+  _transformPoints: function(matrix) {
     var path = this._path;
-    var map = this._path._map;
+    var i, len, latlng;
 
-    var i, j, len, len2;
+    var px = L.point(matrix[4], matrix[5]);
 
-    // I tried to pre-compile that - no difference
-    // Expanding code without inline function is
-    // somehow even slower
-    function transform(point) {
-      var x = point.x;
-      var y = point.y;
+    var crs = path._map.options.crs;
+    var transformation = crs.transformation;
+    var scale = crs.scale(path._map.getZoom());
+    var projection = crs.projection;
 
-      point.x = a * x + b * y + tx;
-      point.y = c * x + d * y + ty;
-
-      return point;
-    }
+    var diff = transformation.untransform(px, scale)
+      .subtract(transformation.untransform(L.point(0, 0), scale));
 
     // console.time('transform');
 
-    // we transformed in pixel space, let's stay there
+    // all shifts are in-place
     if (path._point) { // L.Circle
-      path._latlng = map.layerPointToLatLng(transform(path._point));
+      path._latlng = projection.unproject(
+        projection.project(path._latlng)._add(diff));
+      path._point._add(px);
     } else if (path._originalPoints) { // everything else
       for (i = 0, len = path._originalPoints.length; i < len; i++) {
-        path._latlngs[i] = map.layerPointToLatLng(
-          transform(path._originalPoints[i])
-        );
+        latlng = path._latlngs[i];
+        path._latlngs[i] = projection
+          .unproject(projection.project(latlng)._add(diff));
+        path._originalPoints[i]._add(px);
       }
     }
 
     // holes operations
     if (path._holes) {
       for (i = 0, len = path._holes.length; i < len; i++) {
-        for (j = 0, len2 = path._holes[i].length; j < len2; j++) {
-          path._holes[i][j] = map.layerPointToLatLng(
-            transform(path._holePoints[i][j])
-          );
+        for (var j = 0, len2 = path._holes[i].length; j < len2; j++) {
+          latlng = path._holes[i][j];
+          path._holes[i][j] = projection
+            .unproject(projection.project(latlng)._add(diff));
+          path._holePoints[i][j]._add(px);
         }
       }
     }
@@ -304,23 +297,94 @@ L.Handler.PathDrag = L.Handler.extend( /** @lends  L.Path.Drag.prototype */ {
 
 });
 
+L.Path.prototype.__initEvents = L.Path.prototype._initEvents;
+L.Path.prototype._initEvents = function() {
+  this.__initEvents();
+
+  if (this.options.draggable) {
+    if (this.dragging) {
+      this.dragging.enable();
+    } else {
+      this.dragging = new L.Handler.PathDrag(this);
+      this.dragging.enable();
+    }
+  } else if (this.dragging) {
+    this.dragging.disable();
+  }
+};
 (function() {
-  var initEvents = L.Path.prototype._initEvents;
 
-  L.Path.prototype._initEvents = function() {
-    initEvents.call(this);
+  // listen and propagate dragstart on sub-layers
+  L.FeatureGroup.EVENTS += ' dragstart';
 
-    if (this.options.draggable) {
-      if (this.dragging) {
-        this.dragging.enable();
-      } else {
-        this.dragging = new L.Handler.PathDrag(this);
-        this.dragging.enable();
-      }
-    } else if (this.dragging) {
-      this.dragging.disable();
+  function wrapMethod(klasses, methodName, method) {
+    for (var i = 0, len = klasses.length; i < len; i++) {
+      var klass = klasses[i];
+      klass.prototype['_' + methodName] = klass.prototype[methodName];
+      klass.prototype[methodName] = method;
+    }
+  }
+
+  /**
+   * @param {L.Polygon|L.Polyline} layer
+   * @return {L.MultiPolygon|L.MultiPolyline}
+   */
+  function addLayer(layer) {
+    if (this.hasLayer(layer)) {
+      return this;
+    }
+    layer
+      .on('drag', this._onDrag, this)
+      .on('dragend', this._onDragEnd, this);
+    return this._addLayer.call(this, layer);
+  }
+
+  /**
+   * @param  {L.Polygon|L.Polyline} layer
+   * @return {L.MultiPolygon|L.MultiPolyline}
+   */
+  function removeLayer(layer) {
+    if (!this.hasLayer(layer)) {
+      return this;
+    }
+    layer
+      .off('drag', this._onDrag, this)
+      .off('dragend', this._onDragEnd, this);
+    return this._removeLayer.call(this, layer);
+  }
+
+  // duck-type methods to listen to the drag events
+  wrapMethod([L.MultiPolygon, L.MultiPolyline], 'addLayer', addLayer);
+  wrapMethod([L.MultiPolygon, L.MultiPolyline], 'removeLayer', removeLayer);
+
+  var dragMethods = {
+    _onDrag: function(evt) {
+      var layer = evt.target;
+      this.eachLayer(function(otherLayer) {
+        if (otherLayer !== layer) {
+          otherLayer._applyTransform(layer.dragging._matrix);
+        }
+      });
+
+      this._propagateEvent(evt);
+    },
+
+    _onDragEnd: function(evt) {
+      var layer = evt.target;
+
+      this.eachLayer(function(otherLayer) {
+        if (otherLayer !== layer) {
+          otherLayer._resetTransform();
+          otherLayer.dragging._transformPoints(layer.dragging._matrix);
+        }
+      });
+
+      this._propagateEvent(evt);
     }
   };
+
+  L.MultiPolygon.include(dragMethods);
+  L.MultiPolyline.include(dragMethods);
 
 })();
 // TODO: dismiss that on Leaflet 0.8.x release
@@ -331,8 +395,21 @@ L.Polygon.include( /** @lends L.Polygon.prototype */ {
    * @return {L.LatLng}
    */
   getCenter: function() {
-    var i, j, len, p1, p2, f, area, x, y,
+    var i, j, len, p1, p2, f, area, x, y;
+    
+    var getX, getY;
+    if(this._map) {
+
       points = this._parts[0];
+      getX = function(point) { return point.x };
+      getY = function(point) { return point.y};
+    } else {
+
+      points = this._latlngs;
+      getX = function(point) { return point.lng };
+      getY = function(point) { return point.lat};
+    }
+
 
     // polygon centroid algorithm; only uses the first ring if there are multiple
 
@@ -342,13 +419,18 @@ L.Polygon.include( /** @lends L.Polygon.prototype */ {
       p1 = points[i];
       p2 = points[j];
 
-      f = p1.y * p2.x - p2.y * p1.x;
-      x += (p1.x + p2.x) * f;
-      y += (p1.y + p2.y) * f;
+      f = getY(p1) * getX(p2) - getY(p2) * getX(p1);
+      x += (getX(p1) + getX(p2)) * f;
+      y += (getY(p1) + getY(p2)) * f;
       area += f * 3;
     }
+    
+    var result = [x / area, y / area];
 
-    return this._map.layerPointToLatLng([x / area, y / area]);
+    if(this._map)
+      return this._map.layerPointToLatLng(result);
+    else
+      return L.latLng(result);
   }
 
 });

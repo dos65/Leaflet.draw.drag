@@ -6,8 +6,21 @@ L.Polygon.include( /** @lends L.Polygon.prototype */ {
    * @return {L.LatLng}
    */
   getCenter: function() {
-    var i, j, len, p1, p2, f, area, x, y,
+    var i, j, len, p1, p2, f, area, x, y;
+    
+    var getX, getY;
+    if(this._map) {
+
       points = this._parts[0];
+      getX = function(point) { return point.x };
+      getY = function(point) { return point.y};
+    } else {
+
+      points = this._latlngs;
+      getX = function(point) { return point.lng };
+      getY = function(point) { return point.lat};
+    }
+
 
     // polygon centroid algorithm; only uses the first ring if there are multiple
 
@@ -17,13 +30,18 @@ L.Polygon.include( /** @lends L.Polygon.prototype */ {
       p1 = points[i];
       p2 = points[j];
 
-      f = p1.y * p2.x - p2.y * p1.x;
-      x += (p1.x + p2.x) * f;
-      y += (p1.y + p2.y) * f;
+      f = getY(p1) * getX(p2) - getY(p2) * getX(p1);
+      x += (getX(p1) + getX(p2)) * f;
+      y += (getY(p1) + getY(p2)) * f;
       area += f * 3;
     }
+    
+    var result = [x / area, y / area];
 
-    return this._map.layerPointToLatLng([x / area, y / area]);
+    if(this._map)
+      return this._map.layerPointToLatLng(result);
+    else
+      return L.latLng(result);
   }
 
 });
