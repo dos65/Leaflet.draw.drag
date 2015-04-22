@@ -87,6 +87,7 @@ if (L.Browser.svg) { // SVG transformation
   });
 }
 
+
 // Renderer-independent
 L.Path.include({
 
@@ -97,8 +98,7 @@ L.Path.include({
    * @param  {MouseEvent} e
    */
   _onMouseClick: function(e) {
-    if ((this.dragging && this.dragging.moved()) ||
-      (this._map.dragging && this._map.dragging.moved())) {
+    if (this.dragging && this.dragging.enabled()) {
       return;
     }
 
@@ -218,14 +218,18 @@ L.Handler.PathDrag = L.Handler.extend( /** @lends  L.Path.Drag.prototype */ {
    */
   _onDragEnd: function(evt) {
     L.DomEvent.stop(evt);
+    this._path._map
+      .off('mousemove', this._onDrag, this)
+      .off('mouseup', this._onDragEnd, this);
+    // simple click action 
+    if(!this._path._dragMoved){
+      this._path.fire('click', evt);
+      return;
+    }
     // undo container transform
     this._path._resetTransform();
     // apply matrix
     this._transformPoints(this._matrix);
-
-    this._path._map
-      .off('mousemove', this._onDrag, this)
-      .off('mouseup', this._onDragEnd, this);
 
     // consistency
     this._path.fire('dragend', {
@@ -234,6 +238,7 @@ L.Handler.PathDrag = L.Handler.extend( /** @lends  L.Path.Drag.prototype */ {
       )
     });
 
+    this._path._dragMoved = false;
     this._matrix = null;
     this._startPoint = null;
     this._dragStartPoint = null;
@@ -718,17 +723,6 @@ L.Edit.Rectangle.include( /** @lends L.Edit.Rectangle.prototype */ {
     this._fireEdit();
   }
 });
-L.Polygon.include({
-  
-  /* Disable logic from _onMouseClick method
-   * defined L.Path.Drag
-   */
-  _onMouseClick: function(e){
-    this._fireMouseEvent(e)
-  }
-  
-});
-
 /**
  * Dragging routines for poly handler
  */
