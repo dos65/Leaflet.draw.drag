@@ -1,3 +1,14 @@
+L.Polygon.include({
+  
+  /* Disable logic from _onMouseClick method
+   * defined L.Path.Drag
+   */
+  _onMouseClick: function(e){
+    this._fireMouseEvent(e)
+  }
+  
+});
+
 /**
  * Dragging routines for poly handler
  */
