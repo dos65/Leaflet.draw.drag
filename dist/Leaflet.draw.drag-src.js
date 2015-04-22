@@ -415,7 +415,6 @@ L.Polygon.include( /** @lends L.Polygon.prototype */ {
       getY = function(point) { return point.lat};
     }
 
-
     // polygon centroid algorithm; only uses the first ring if there are multiple
 
     area = x = y = 0;
@@ -430,12 +429,13 @@ L.Polygon.include( /** @lends L.Polygon.prototype */ {
       area += f * 3;
     }
     
-    var result = [x / area, y / area];
+    x = x / area;
+    y = y / area;
 
     if(this._map)
-      return this._map.layerPointToLatLng(result);
+      return this._map.layerPointToLatLng([x, y]);
     else
-      return L.latLng(result);
+      return L.latLng([y, x]);
   }
 
 });
